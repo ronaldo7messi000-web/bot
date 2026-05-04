@@ -1,6 +1,8 @@
 import logging
 import sqlite3
 import os
+import re
+from html import escape as h  # ✅ HTML-safe escaping — no more entity crashes
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -33,11 +35,10 @@ logger = logging.getLogger(__name__)
 
 # ─── HELPERS ──────────────────────────────────────────────
 def esc(text):
+    """HTML-escape user input. Safe against ALL special characters."""
     if not text:
         return "—"
-    for ch in ["_", "*", "`", "["]:
-        text = text.replace(ch, f"\\{ch}")
-    return text
+    return h(str(text))
 
 def is_admin(uid):
     return uid in ADMIN_IDS
@@ -122,7 +123,7 @@ def init_db():
         )
     """)
     default_desc = (
-        "🎁 Har hafta *dushanba* kuni top 1 va top 2 eng ko'p ishlatilgan "
+        "🎁 Har hafta <b>dushanba</b> kuni top 1 va top 2 eng ko'p ishlatilgan "
         "promo kod egalariga brainrot sovg'a qilinadi!"
     )
     c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('promo_desc', ?)", (default_desc,))
@@ -199,13 +200,12 @@ def contact_only_kb(user_id):
 # ─── /start ───────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_user(update.effective_user)
-    # Clear any leftover state so user always starts fresh
     context.user_data.clear()
     await update.message.reply_text(
-        "*BrainrotTrade*'ga xush kelibsiz!\n\n"
-        "Bu yerda siz brainrot *sotish* yoki *trade* qilishingiz mumkin!\n\n"
+        "<b>BrainrotTrade</b>'ga xush kelibsiz!\n\n"
+        "Bu yerda siz brainrot <b>sotish</b> yoki <b>trade</b> qilishingiz mumkin!\n\n"
         "Quyidagi menyudan tanlang 👇",
-        parse_mode="Markdown",
+        parse_mode="HTML",
         reply_markup=main_menu_kb(update.effective_user.id)
     )
     return MAIN_MENU
@@ -213,29 +213,29 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── LISTINGS ─────────────────────────────────────────────
 async def send_listing(target, row, is_last, has_more, listing_type, next_offset):
     lid, user_id, name, desc, price, want, photo_id, promoted = row
-    badge = "📣 *REKLAMA* | " if promoted else ""
+    badge = "📣 <b>REKLAMA</b> | " if promoted else ""
 
     if listing_type == "sale":
         caption = (
-            f"{badge}🧠 *{esc(name)}*\n"
-            f"🆔 E'lon ID: `{lid}`\n"
+            f"{badge}🧠 <b>{esc(name)}</b>\n"
+            f"🆔 E'lon ID: <code>{lid}</code>\n"
             f"💬 {esc(desc)}\n"
-            f"💰 Narx: *{esc(price)}*"
+            f"💰 Narx: <b>{esc(price)}</b>"
         )
     else:
         caption = (
-            f"{badge}🧠 *{esc(name)}*\n"
-            f"🆔 E'lon ID: `{lid}`\n"
+            f"{badge}🧠 <b>{esc(name)}</b>\n"
+            f"🆔 E'lon ID: <code>{lid}</code>\n"
             f"💬 {esc(desc)}\n"
-            f"🔄 Trade uchun: *{esc(want)}*"
+            f"🔄 Trade uchun: <b>{esc(want)}</b>"
         )
 
     kb = listing_kb(user_id, has_more, listing_type, next_offset) if is_last else contact_only_kb(user_id)
 
     if photo_id:
-        await target.reply_photo(photo=photo_id, caption=caption, parse_mode="Markdown", reply_markup=kb)
+        await target.reply_photo(photo=photo_id, caption=caption, parse_mode="HTML", reply_markup=kb)
     else:
-        await target.reply_text(caption, parse_mode="Markdown", reply_markup=kb)
+        await target.reply_text(caption, parse_mode="HTML", reply_markup=kb)
 
 async def view_listings(update: Update, context: ContextTypes.DEFAULT_TYPE, listing_type: str):
     conn = get_conn()
@@ -252,13 +252,13 @@ async def view_listings(update: Update, context: ContextTypes.DEFAULT_TYPE, list
     type_label = "Sotish" if listing_type == "sale" else "Trade"
     if not rows:
         await update.message.reply_text(
-            f"😔 Hozircha *{type_label}* e'lonlari yo'q.\nBirinchi bo'lib e'lon qo'shing!",
-            parse_mode="Markdown"
+            f"😔 Hozircha <b>{type_label}</b> e'lonlari yo'q.\nBirinchi bo'lib e'lon qo'shing!",
+            parse_mode="HTML"
         )
         return
 
     has_more = len(rows) > PAGE_SIZE
-    await update.message.reply_text(f"📋 *{type_label} e'lonlari:*", parse_mode="Markdown")
+    await update.message.reply_text(f"📋 <b>{type_label} e'lonlari:</b>", parse_mode="HTML")
     for i, row in enumerate(rows[:PAGE_SIZE]):
         is_last = (i == PAGE_SIZE - 1)
         await send_listing(update.message, row, is_last, has_more, listing_type, PAGE_SIZE)
@@ -334,8 +334,8 @@ async def sale_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
     context.user_data.pop("listing", None)
     await update.message.reply_text(
-        f"✅ *{esc(d['name'])}* sotish e'loni qo'shildi!",
-        parse_mode="Markdown",
+        f"✅ <b>{esc(d['name'])}</b> sotish e'loni qo'shildi!",
+        parse_mode="HTML",
         reply_markup=main_menu_kb(update.effective_user.id)
     )
     return MAIN_MENU
@@ -385,8 +385,8 @@ async def trade_want(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
     context.user_data.pop("listing", None)
     await update.message.reply_text(
-        f"✅ *{esc(d['name'])}* trade e'loni qo'shildi!",
-        parse_mode="Markdown",
+        f"✅ <b>{esc(d['name'])}</b> trade e'loni qo'shildi!",
+        parse_mode="HTML",
         reply_markup=main_menu_kb(update.effective_user.id)
     )
     return MAIN_MENU
@@ -395,18 +395,17 @@ async def trade_want(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def promo_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     desc = get_setting("promo_desc")
     await update.message.reply_text(
-        f"🎟 *Promo Kod*\n\n{desc}",
-        parse_mode="Markdown",
+        f"🎟 <b>Promo Kod</b>\n\n{desc}",
+        parse_mode="HTML",
         reply_markup=promo_menu_kb()
     )
-    # ✅ FIX: Stay in MAIN_MENU so promo sub-buttons are reachable
     return MAIN_MENU
 
 async def promo_create_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "✏️ Promo kodingiz nomini kiriting:\n"
-        "_(faqat harflar, raqamlar va _ belgisi, max 20 belgi)_",
-        parse_mode="Markdown",
+        "<i>(faqat harflar, raqamlar va _ belgisi, max 20 belgi)</i>",
+        parse_mode="HTML",
         reply_markup=cancel_kb()
     )
     return PROMO_CREATE
@@ -418,7 +417,6 @@ async def promo_create_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     code = update.message.text.strip().upper()
     uid = update.effective_user.id
 
-    import re
     if not re.match(r"^[A-Z0-9_]{1,20}$", code):
         await update.message.reply_text(
             "❗ Faqat harflar, raqamlar va _ belgisi ishlatilishi mumkin (max 20 belgi).\nQaytadan kiriting:"
@@ -432,9 +430,9 @@ async def promo_create_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if existing:
         conn.close()
         await update.message.reply_text(
-            f"❗ Sizda allaqachon promo kod mavjud: *{existing[0]}*\n"
+            f"❗ Sizda allaqachon promo kod mavjud: <b>{esc(existing[0])}</b>\n"
             f"Har bir foydalanuvchi faqat 1 ta promo kod yarata oladi.",
-            parse_mode="Markdown",
+            parse_mode="HTML",
             reply_markup=main_menu_kb(uid)
         )
         return MAIN_MENU
@@ -443,8 +441,8 @@ async def promo_create_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if c.fetchone():
         conn.close()
         await update.message.reply_text(
-            f"❗ *{code}* promo kodi allaqachon band. Boshqa nom tanlang:",
-            parse_mode="Markdown"
+            f"❗ <b>{esc(code)}</b> promo kodi allaqachon band. Boshqa nom tanlang:",
+            parse_mode="HTML"
         )
         return PROMO_CREATE
 
@@ -453,9 +451,9 @@ async def promo_create_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
 
     await update.message.reply_text(
-        f"✅ Promo kodingiz yaratildi: *{code}*\n\n"
+        f"✅ Promo kodingiz yaratildi: <b>{esc(code)}</b>\n\n"
         f"Do'stlaringizga yuboring — ular ishlatgan sari reytingda ko'tarilasiz!",
-        parse_mode="Markdown",
+        parse_mode="HTML",
         reply_markup=main_menu_kb(uid)
     )
     return MAIN_MENU
@@ -484,7 +482,7 @@ async def promo_use_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "❗ Bunday promo kod topilmadi. Tekshirib qaytadan kiriting:"
         )
-        return PROMO_USE  # ✅ Stay in PROMO_USE state so user can retry
+        return PROMO_USE
 
     owner_id = row[0]
 
@@ -496,19 +494,17 @@ async def promo_use_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return MAIN_MENU
 
-    # ✅ FIX: Check if already used BEFORE attempting insert
+    # Explicit duplicate check before insert
     c.execute("SELECT id FROM promo_uses WHERE code=? AND user_id=?", (code, uid))
-    already_used = c.fetchone()
-    if already_used:
+    if c.fetchone():
         conn.close()
         await update.message.reply_text(
-            f"❗ Siz *{code}* promo kodini allaqachon ishlatgansiz!",
-            parse_mode="Markdown",
+            f"❗ Siz <b>{esc(code)}</b> promo kodini allaqachon ishlatgansiz!",
+            parse_mode="HTML",
             reply_markup=main_menu_kb(uid)
         )
         return MAIN_MENU
 
-    # Safe to insert now
     try:
         c.execute("INSERT INTO promo_uses (code, user_id) VALUES (?,?)", (code, uid))
         c.execute("UPDATE promo_codes SET use_count = use_count + 1 WHERE code=?", (code,))
@@ -521,27 +517,29 @@ async def promo_use_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(
                 chat_id=owner_id,
-                text=f"🎉 Promo kodingiz *{code}* ishlatildi!\n📊 Jami foydalanishlar: *{new_count}*",
-                parse_mode="Markdown"
+                text=(
+                    f"🎉 Promo kodingiz <b>{esc(code)}</b> ishlatildi!\n"
+                    f"📊 Jami foydalanishlar: <b>{new_count}</b>"
+                ),
+                parse_mode="HTML"
             )
         except Exception:
             pass
 
         await update.message.reply_text(
-            f"✅ *{code}* promo kodi muvaffaqiyatli ishlatildi!",
-            parse_mode="Markdown",
+            f"✅ <b>{esc(code)}</b> promo kodi muvaffaqiyatli ishlatildi!",
+            parse_mode="HTML",
             reply_markup=main_menu_kb(uid)
         )
 
     except sqlite3.IntegrityError:
-        # Fallback safety net (race condition)
         try:
             conn.close()
         except Exception:
             pass
         await update.message.reply_text(
-            f"❗ Siz *{code}* promo kodini allaqachon ishlatgansiz!",
-            parse_mode="Markdown",
+            f"❗ Siz <b>{esc(code)}</b> promo kodini allaqachon ishlatgansiz!",
+            parse_mode="HTML",
             reply_markup=main_menu_kb(uid)
         )
 
@@ -565,26 +563,26 @@ async def promo_top5(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not rows or rows[0][1] == 0:
         await update.message.reply_text(
-            f"😔 Hali hech qanday promo kod ishlatilmagan.\n\n_{desc}_",
-            parse_mode="Markdown",
+            f"😔 Hali hech qanday promo kod ishlatilmagan.\n\n<i>{esc(desc)}</i>",
+            parse_mode="HTML",
             reply_markup=promo_menu_kb()
         )
         return
 
-    text = f"🏆 *Top 5 promo kodlar:*\n\n"
+    text = "🏆 <b>Top 5 promo kodlar:</b>\n\n"
     for i, (code, count, uname, fname) in enumerate(rows):
-        owner = f"@{uname}" if uname else (fname or "Noma'lum")
-        text += f"{medals[i]} *{code}* — {count} marta | {esc(owner)}\n"
+        owner = f"@{esc(uname)}" if uname else esc(fname or "Noma'lum")
+        text += f"{medals[i]} <b>{esc(code)}</b> — {count} marta | {owner}\n"
 
-    text += f"\n\n📌 _{desc}_"
-    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=promo_menu_kb())
+    text += f"\n\n📌 <i>{esc(desc)}</i>"
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=promo_menu_kb())
 
 # ─── ADMIN: EDIT PROMO DESC ───────────────────────────────
 async def admin_promo_desc_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current = get_setting("promo_desc")
     await update.message.reply_text(
-        f"✏️ Joriy promo tavsif:\n_{current}_\n\nYangi tavsifni kiriting:",
-        parse_mode="Markdown",
+        f"✏️ Joriy promo tavsif:\n<i>{esc(current)}</i>\n\nYangi tavsifni kiriting:",
+        parse_mode="HTML",
         reply_markup=cancel_kb()
     )
     return ADMIN_PROMO_DESC
@@ -615,8 +613,8 @@ async def activate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(
                     chat_id=owner_id,
-                    text=f"🎉 *{esc(name)}* e'loningiz reklama sifatida faollashtirildi! 📣",
-                    parse_mode="Markdown"
+                    text=f"🎉 <b>{esc(name)}</b> e'loningiz reklama sifatida faollashtirildi! 📣",
+                    parse_mode="HTML"
                 )
             except Exception:
                 pass
@@ -708,15 +706,15 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
 
     await update.message.reply_text(
-        f"📊 *Statistika:*\n\n"
-        f"👥 Jami foydalanuvchilar: *{total}*\n"
-        f"🚫 Bot bloklagan: *{blocked}*\n"
-        f"📨 Xabar olishi mumkin: *{total - blocked}*\n"
-        f"🛒 Sotish e'lonlari: *{sales}*\n"
-        f"🔄 Trade e'lonlari: *{trades}*\n"
-        f"📣 Reklamalar: *{promos}*\n"
-        f"🎟 Promo kodlar: *{pcodes}*",
-        parse_mode="Markdown"
+        f"📊 <b>Statistika:</b>\n\n"
+        f"👥 Jami foydalanuvchilar: <b>{total}</b>\n"
+        f"🚫 Bot bloklagan: <b>{blocked}</b>\n"
+        f"📨 Xabar olishi mumkin: <b>{total - blocked}</b>\n"
+        f"🛒 Sotish e'lonlari: <b>{sales}</b>\n"
+        f"🔄 Trade e'lonlari: <b>{trades}</b>\n"
+        f"📣 Reklamalar: <b>{promos}</b>\n"
+        f"🎟 Promo kodlar: <b>{pcodes}</b>",
+        parse_mode="HTML"
     )
     return MAIN_MENU
 
@@ -760,8 +758,8 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_stats(update, context)
     elif text == "✅ Reklamani faollashtirish" and is_admin(uid):
         await update.message.reply_text(
-            "Faollashtirish uchun: `/activate_5`\n(5 o'rniga e'lon ID sini yozing)",
-            parse_mode="Markdown"
+            "Faollashtirish uchun: <code>/activate_5</code>\n(5 o'rniga e'lon ID sini yozing)",
+            parse_mode="HTML"
         )
     elif text == "✏️ Promo tavsifni o'zgartirish" and is_admin(uid):
         return await admin_promo_desc_start(update, context)
@@ -780,18 +778,6 @@ async def cancel(update, context):
     )
     return MAIN_MENU
 
-# ─── FALLBACK: handles users who message after bot restart ─
-async def fallback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    If a user sends any message outside an active conversation
-    (e.g. after bot restart on Railway), send them back to main menu.
-    """
-    save_user(update.effective_user)
-    await update.message.reply_text(
-        "🏠 Asosiy menyu:",
-        reply_markup=main_menu_kb(update.effective_user.id)
-    )
-
 # ─── MAIN ─────────────────────────────────────────────────
 def main():
     init_db()
@@ -800,8 +786,6 @@ def main():
     conv = ConversationHandler(
         entry_points=[
             CommandHandler("start", start),
-            # ✅ FIX: Allow ANY message to start the conversation
-            # so users aren't stuck after bot restart on Railway
             MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu),
         ],
         states={
@@ -823,7 +807,6 @@ def main():
         fallbacks=[
             CommandHandler("start", start),
         ],
-        # ✅ Allow re-entering conversation from any state
         allow_reentry=True,
         per_message=False,
     )
