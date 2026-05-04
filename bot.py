@@ -26,9 +26,6 @@ BOT_USERNAME = "BrainrotTrade_uZbot"
 
 PAGE_SIZE = 1
 
-# ─── DB PATH — NEVER changes, survives restarts ───────────
-# Uses absolute path so it never gets lost no matter where
-# the script is run from.
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "brainrot.db")
 
 logging.basicConfig(level=logging.INFO)
@@ -52,22 +49,21 @@ def is_admin(uid):
     TRADE_PHOTO, TRADE_NAME, TRADE_DESC, TRADE_WANT,
     ADMIN_DELETE_ID,
     BROADCAST_MSG,
-    PROMO_CREATE,       # user typing their promo code name
-    PROMO_USE,          # user typing a promo code to use
-    ADMIN_PROMO_DESC,   # admin editing the promo description
+    PROMO_CREATE,
+    PROMO_USE,
+    ADMIN_PROMO_DESC,
 ) = range(14)
 
 # ─── DB ───────────────────────────────────────────────────
 def get_conn():
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA journal_mode=WAL")  # prevents DB locks / corruption
+    conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 def init_db():
     conn = get_conn()
     c = conn.cursor()
 
-    # Users — safe migration: only adds columns if missing
     c.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id   INTEGER PRIMARY KEY,
@@ -75,7 +71,6 @@ def init_db():
             full_name TEXT
         )
     """)
-    # Safe migrations
     existing = {row[1] for row in c.execute("PRAGMA table_info(users)").fetchall()}
     for col, definition in [
         ("referred_by", "INTEGER"),
@@ -85,7 +80,6 @@ def init_db():
         if col not in existing:
             c.execute(f"ALTER TABLE users ADD COLUMN {col} {definition}")
 
-    # Listings
     c.execute("""
         CREATE TABLE IF NOT EXISTS listings (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,7 +96,6 @@ def init_db():
         )
     """)
 
-    # Promo codes
     c.execute("""
         CREATE TABLE IF NOT EXISTS promo_codes (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,7 +106,6 @@ def init_db():
         )
     """)
 
-    # Promo uses — track who used which code (1 use per user per code)
     c.execute("""
         CREATE TABLE IF NOT EXISTS promo_uses (
             id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -123,7 +115,6 @@ def init_db():
         )
     """)
 
-    # Settings (key/value)
     c.execute("""
         CREATE TABLE IF NOT EXISTS settings (
             key   TEXT PRIMARY KEY,
@@ -141,12 +132,10 @@ def init_db():
     logger.info(f"DB initialized at {DB_PATH}")
 
 def save_user(user):
-    """Always upsert — never loses existing users on restart."""
     conn = get_conn()
     c = conn.cursor()
     c.execute("SELECT user_id FROM users WHERE user_id=?", (user.id,))
     if c.fetchone():
-        # Update name/username only — keep everything else
         c.execute("UPDATE users SET username=?, full_name=? WHERE user_id=?",
                   (user.username, user.full_name, user.id))
     else:
@@ -210,6 +199,8 @@ def contact_only_kb(user_id):
 # ─── /start ───────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_user(update.effective_user)
+    # Clear any leftover state so user always starts fresh
+    context.user_data.clear()
     await update.message.reply_text(
         "*BrainrotTrade*'ga xush kelibsiz!\n\n"
         "Bu yerda siz brainrot *sotish* yoki *trade* qilishingiz mumkin!\n\n"
@@ -408,6 +399,7 @@ async def promo_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
         reply_markup=promo_menu_kb()
     )
+    # ✅ FIX: Stay in MAIN_MENU so promo sub-buttons are reachable
     return MAIN_MENU
 
 async def promo_create_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -426,7 +418,6 @@ async def promo_create_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     code = update.message.text.strip().upper()
     uid = update.effective_user.id
 
-    # Validate
     import re
     if not re.match(r"^[A-Z0-9_]{1,20}$", code):
         await update.message.reply_text(
@@ -436,7 +427,6 @@ async def promo_create_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn = get_conn()
     c = conn.cursor()
-    # Check if user already has a promo code
     c.execute("SELECT code FROM promo_codes WHERE owner_id=?", (uid,))
     existing = c.fetchone()
     if existing:
@@ -449,7 +439,6 @@ async def promo_create_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return MAIN_MENU
 
-    # Check if code already taken
     c.execute("SELECT owner_id FROM promo_codes WHERE code=?", (code,))
     if c.fetchone():
         conn.close()
@@ -493,13 +482,12 @@ async def promo_use_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not row:
         conn.close()
         await update.message.reply_text(
-            "❗ Bunday promo kod topilmadi. Tekshirib qaytadan kiriting:",
+            "❗ Bunday promo kod topilmadi. Tekshirib qaytadan kiriting:"
         )
-        return PROMO_USE
+        return PROMO_USE  # ✅ Stay in PROMO_USE state so user can retry
 
     owner_id = row[0]
 
-    # Can't use your own code
     if owner_id == uid:
         conn.close()
         await update.message.reply_text(
@@ -508,18 +496,28 @@ async def promo_use_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return MAIN_MENU
 
-    # Check already used
+    # ✅ FIX: Check if already used BEFORE attempting insert
+    c.execute("SELECT id FROM promo_uses WHERE code=? AND user_id=?", (code, uid))
+    already_used = c.fetchone()
+    if already_used:
+        conn.close()
+        await update.message.reply_text(
+            f"❗ Siz *{code}* promo kodini allaqachon ishlatgansiz!",
+            parse_mode="Markdown",
+            reply_markup=main_menu_kb(uid)
+        )
+        return MAIN_MENU
+
+    # Safe to insert now
     try:
         c.execute("INSERT INTO promo_uses (code, user_id) VALUES (?,?)", (code, uid))
         c.execute("UPDATE promo_codes SET use_count = use_count + 1 WHERE code=?", (code,))
         conn.commit()
 
-        # Get new count
         c.execute("SELECT use_count FROM promo_codes WHERE code=?", (code,))
         new_count = c.fetchone()[0]
         conn.close()
 
-        # Notify owner
         try:
             await context.bot.send_message(
                 chat_id=owner_id,
@@ -534,8 +532,13 @@ async def promo_use_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
             reply_markup=main_menu_kb(uid)
         )
+
     except sqlite3.IntegrityError:
-        conn.close()
+        # Fallback safety net (race condition)
+        try:
+            conn.close()
+        except Exception:
+            pass
         await update.message.reply_text(
             f"❗ Siz *{code}* promo kodini allaqachon ishlatgansiz!",
             parse_mode="Markdown",
@@ -650,7 +653,6 @@ async def broadcast_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(chat_id=uid, text=text)
             sent += 1
         except Exception as e:
-            # Mark user as blocked if they blocked the bot
             err = str(e).lower()
             if "blocked" in err or "deactivated" in err or "not found" in err:
                 conn2 = get_conn()
@@ -723,7 +725,6 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     uid = update.effective_user.id
 
-    # Save user on every interaction (keeps data fresh)
     save_user(update.effective_user)
 
     if text == "🛒 Sotish":
@@ -735,7 +736,7 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "📋 Trade e'lonlari":
         await view_listings(update, context, "trade")
     elif text == "🎟 Promo kod":
-        await promo_menu(update, context)
+        return await promo_menu(update, context)
     elif text == "➕ Promo kod yaratish":
         return await promo_create_start(update, context)
     elif text == "🔑 Promo kod ishlatish":
@@ -779,30 +780,51 @@ async def cancel(update, context):
     )
     return MAIN_MENU
 
+# ─── FALLBACK: handles users who message after bot restart ─
+async def fallback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    If a user sends any message outside an active conversation
+    (e.g. after bot restart on Railway), send them back to main menu.
+    """
+    save_user(update.effective_user)
+    await update.message.reply_text(
+        "🏠 Asosiy menyu:",
+        reply_markup=main_menu_kb(update.effective_user.id)
+    )
+
 # ─── MAIN ─────────────────────────────────────────────────
 def main():
     init_db()
     app = Application.builder().token(BOT_TOKEN).build()
 
     conv = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
+        entry_points=[
+            CommandHandler("start", start),
+            # ✅ FIX: Allow ANY message to start the conversation
+            # so users aren't stuck after bot restart on Railway
+            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu),
+        ],
         states={
-            MAIN_MENU:    [MessageHandler(filters.TEXT | filters.PHOTO, handle_menu)],
-            SALE_PHOTO:   [MessageHandler(filters.PHOTO | filters.TEXT, sale_photo)],
-            SALE_NAME:    [MessageHandler(filters.TEXT, sale_name)],
-            SALE_DESC:    [MessageHandler(filters.TEXT, sale_desc)],
-            SALE_PRICE:   [MessageHandler(filters.TEXT, sale_price)],
-            TRADE_PHOTO:  [MessageHandler(filters.PHOTO | filters.TEXT, trade_photo)],
-            TRADE_NAME:   [MessageHandler(filters.TEXT, trade_name)],
-            TRADE_DESC:   [MessageHandler(filters.TEXT, trade_desc)],
-            TRADE_WANT:   [MessageHandler(filters.TEXT, trade_want)],
+            MAIN_MENU:        [MessageHandler(filters.TEXT | filters.PHOTO, handle_menu)],
+            SALE_PHOTO:       [MessageHandler(filters.PHOTO | filters.TEXT, sale_photo)],
+            SALE_NAME:        [MessageHandler(filters.TEXT, sale_name)],
+            SALE_DESC:        [MessageHandler(filters.TEXT, sale_desc)],
+            SALE_PRICE:       [MessageHandler(filters.TEXT, sale_price)],
+            TRADE_PHOTO:      [MessageHandler(filters.PHOTO | filters.TEXT, trade_photo)],
+            TRADE_NAME:       [MessageHandler(filters.TEXT, trade_name)],
+            TRADE_DESC:       [MessageHandler(filters.TEXT, trade_desc)],
+            TRADE_WANT:       [MessageHandler(filters.TEXT, trade_want)],
             ADMIN_DELETE_ID:  [MessageHandler(filters.TEXT, admin_delete_listing)],
             BROADCAST_MSG:    [MessageHandler(filters.TEXT | filters.PHOTO, broadcast_msg)],
             PROMO_CREATE:     [MessageHandler(filters.TEXT, promo_create_done)],
             PROMO_USE:        [MessageHandler(filters.TEXT, promo_use_done)],
             ADMIN_PROMO_DESC: [MessageHandler(filters.TEXT, admin_promo_desc_done)],
         },
-        fallbacks=[CommandHandler("start", start)],
+        fallbacks=[
+            CommandHandler("start", start),
+        ],
+        # ✅ Allow re-entering conversation from any state
+        allow_reentry=True,
         per_message=False,
     )
 
