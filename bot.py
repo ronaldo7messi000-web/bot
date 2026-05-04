@@ -780,8 +780,23 @@ async def cancel(update, context):
 
 # ─── MAIN ─────────────────────────────────────────────────
 def main():
+    import time
     init_db()
+
+    # ✅ Wait for old Railway instance to fully die before polling starts.
+    # Without this, two instances race to poll and Telegram rejects both.
+    logger.info("Waiting 5s for previous instance to shut down...")
+    time.sleep(5)
+
     app = Application.builder().token(BOT_TOKEN).build()
+
+    # ✅ Delete any leftover webhook before polling.
+    # If a webhook was ever set, polling will silently fail without this.
+    async def post_init(application):
+        await application.bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Webhook cleared. Starting polling...")
+
+    app.post_init = post_init
 
     conv = ConversationHandler(
         entry_points=[
